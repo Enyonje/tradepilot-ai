@@ -38,3 +38,12 @@ TradePilot now has server-side connector adapters for three research sources. Co
 - Active listing prices are not sold prices. Only the sold-comps connector is labelled as completed-sale evidence.
 - Verify product identity, variant, condition, destination shipping, stock, delivery estimate, return policy, marketplace fees and local taxes before approving an opportunity.
 - The API deliberately has no automatic supplier order or live listing action in this phase.
+
+
+## Coordinated product research workflow
+
+`POST /api/agents/research` runs CJdropshipping catalogue search, Google Trends and sold-comps lookup concurrently. Each connector can fail independently; the workflow persists a `commerce-research-orchestrator` row in `AgentRun` with input, output, status and any connector errors. `GET /api/agents/runs?limit=30` returns recent runs.
+
+The workflow deliberately refuses to create a priced opportunity unless the supplier response exposes an explicit price currency, the sold-comps currency matches the requested currency, and the sold-data market matches the target country. Current sold comps are limited to eBay US and UK. Other markets can collect trend/supplier evidence but need a local sold-data source and/or currency conversion before a comparable opportunity is saved. Provider payloads vary; verify field mapping against the actual API account responses before operational use.
+
+The optional AI assessment is advisory only. It may summarize supplied evidence but cannot authorize purchasing, supplier contact, or listing publication.

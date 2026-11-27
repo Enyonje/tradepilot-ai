@@ -1,8 +1,11 @@
 {
   "name": "tradepilot-ai",
   "private": true,
-  "version": "0.1.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "version": "0.2.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w @tradepilot/api\" \"npm run dev -w @tradepilot/web\"",
     "build": "npm run build -w @tradepilot/api && npm run build -w @tradepilot/web",

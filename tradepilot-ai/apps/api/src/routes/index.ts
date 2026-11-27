@@ -10,12 +10,46 @@ import { connectorStatus } from "../connectors/http.js";
 import { searchCjProducts } from "../connectors/cj.js";
 import { getGoogleTrends } from "../connectors/trends.js";
 import { getEbaySoldComps } from "../connectors/sold-comps.js";
+import { getAgentRuns, runProductResearch } from "../orchestration/product-research.js";
+import { OpportunityStatus } from "@prisma/client";
+import { prisma } from "../db/client.js";
+import {
+  configureAutopilot,
+  getAutopilotState,
+  runAutonomousCycle
+} from "../orchestration/autopilot.js";
+
 
 export const router = Router();
 
 router.get("/health", (_req, res) => res.json({ status: "ok", service: "tradepilot-api", timestamp: new Date().toISOString() }));
 router.get("/ai/providers", (_req, res) => res.json({ providers: providerStatus() }));
 router.get("/agents", (_req, res) => res.json({ agents }));
+
+router.get("/agents/runs", async (req, res, next) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 30;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return res.status(400).json({ error: "limit must be an integer between 1 and 100" });
+    const items = await getAgentRuns(limit);
+    res.json({ items, count: items.length });
+  } catch (error) { next(error); }
+});
+
+router.post("/agents/research", async (req, res, next) => {
+  try {
+    const input = z.object({
+      keyword: z.string().min(2).max(120),
+      targetCountry: z.string().length(2),
+      currency: z.string().length(3),
+      marketplace: z.string().min(2).max(80),
+      trendGeo: z.string().length(2).optional(),
+      soldMarketplace: z.enum(["EBAY_US", "EBAY_GB"]).optional(),
+      maxProducts: z.number().int().min(1).max(50).optional()
+    }).parse(req.body);
+    const result = await runProductResearch(input);
+    res.status(201).json(result);
+  } catch (error) { next(error); }
+});
 router.get("/markets", (_req, res) => res.json({ markets }));
 router.get("/integrations", (_req, res) => res.json({ integrations: connectorStatus() }));
 
@@ -24,6 +58,77 @@ router.get("/research/cj/products", async (req, res, next) => {
     const query = z.object({ keyword: z.string().min(2).max(120), page: z.coerce.number().int().min(1).max(1000).optional(), size: z.coerce.number().int().min(1).max(100).optional() }).parse(req.query);
     res.json(await searchCjProducts(query));
   } catch (error) { next(error); }
+});
+
+router.get("/autopilot", (_req, res) => {
+  res.json(getAutopilotState());
+});
+
+router.patch("/autopilot", (req, res, next) => {
+  try {
+    const body = z.object({
+      enabled: z.boolean().optional(),
+      intervalMinutes: z.number().int().min(5).max(10080).optional(),
+      minNetProfit: z.number().nonnegative().optional(),
+      minRoiPercent: z.number().nonnegative().optional(),
+      defaultShippingEstimate: z.number().nonnegative().optional(),
+      returnsReservePercent: z.number().min(0).max(50).optional(),
+      autoPromoteApproved: z.boolean().optional(),
+      seedKeywords: z.array(z.string().min(2).max(120)).max(50).optional()
+    }).parse(req.body);
+
+    res.json(configureAutopilot(body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/autopilot/run", async (req, res, next) => {
+  try {
+    const body = z.object({
+      keywords: z.array(z.string().min(2).max(120)).max(25).optional()
+    }).parse(req.body ?? {});
+    const result = await runAutonomousCycle(body.keywords);
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/sources", async (_req, res, next) => {
+  try {
+    const items = await prisma.productSource.findMany({ orderBy: { createdAt: "desc" } });
+    res.json({ items, count: items.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/sources", async (req, res, next) => {
+  try {
+    const body = z.object({
+      name: z.string().min(2).max(120),
+      sourceType: z.string().min(2).max(50).default("keyword_seed"),
+      sourceUrl: z.string().url().optional(),
+      countryCode: z.string().length(2).optional(),
+      enabled: z.boolean().default(true),
+      keywords: z.array(z.string().min(2).max(120)).optional()
+    }).parse(req.body);
+
+    const created = await prisma.productSource.create({
+      data: {
+        name: body.name.trim(),
+        sourceType: body.sourceType,
+        sourceUrl: body.sourceUrl,
+        countryCode: body.countryCode?.toUpperCase(),
+        enabled: body.enabled,
+        config: body.keywords ? { keywords: body.keywords } : undefined
+      }
+    });
+    res.status(201).json(created);
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/research/trends", async (req, res, next) => {
@@ -102,6 +207,22 @@ router.patch("/suppliers/:id/verification", async (req, res, next) => {
     const supplier = await updateSupplierVerification(req.params.id, body.verified);
     res.json(supplier);
   } catch (error) { next(error); }
+});
+
+router.patch("/opportunities/:id/status", async (req, res, next) => {
+  try {
+    const body = z.object({
+      status: z.nativeEnum(OpportunityStatus)
+    }).parse(req.body);
+
+    const updated = await prisma.productOpportunity.update({
+      where: { id: req.params.id },
+      data: { status: body.status }
+    });
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.post("/ai/chat", async (req, res, next) => {

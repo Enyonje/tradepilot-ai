@@ -57,6 +57,8 @@ Product and opportunity records include target country, currency, marketplace an
 - `POST /api/ai/chat`
 - `POST /api/profit/calculate`
 - `GET /api/agents`
+- `POST /api/agents/research` — coordinates CJ supplier catalogue, Google Trends and sold-comps research, persists an AgentRun, and only saves product opportunities when supplier and sold-price evidence are both available.
+- `GET /api/agents/runs?limit=30` — recent orchestration run history.
 - `GET /api/markets`
 - `GET /api/opportunities?country=US&status=DISCOVERED`
 - `POST /api/discovery/import` — import up to 100 normalized candidate records
@@ -74,6 +76,25 @@ Product and opportunity records include target country, currency, marketplace an
 - Supplier verification is a manual review flag, not independent proof of supplier legitimacy.
 - Profit estimates are only as accurate as the fees, shipping, tax, returns and currency data supplied.
 - Add human approval, per-order spend caps, idempotency and audit logs before enabling financial actions.
+
+## Agent orchestration (new)
+
+The first product-research workflow runs three independent evidence connectors in parallel: CJdropshipping supplier catalogue, Google Trends, and sold-price comps. Connector failures are isolated and recorded instead of stopping the whole workflow. A research run is persisted in `AgentRun`; optional AI assessment interprets only supplied evidence and is not allowed to invent metrics or authorize actions. Product opportunities are created only when a usable supplier price with explicit currency and sold-comps median are both available, and the supplier, sold-comps and target currencies/markets match. The current sold-comps adapter supports US and UK eBay only; other target markets can still be researched, but no local opportunity price is saved until a matching sold-data source and FX support are implemented. The current adapter normalizer supports common provider response shapes, so provider-specific payload mapping may need refinement against real account responses.
+
+Example request:
+
+```json
+{
+  "keyword": "wireless earbuds",
+  "targetCountry": "US",
+  "currency": "USD",
+  "marketplace": "EBAY",
+  "soldMarketplace": "EBAY_US",
+  "maxProducts": 20
+}
+```
+
+`currency` must match the currency returned by the selected sold-comps marketplace. The workflow does not convert currencies or calculate final landed profit automatically. It does not purchase, publish, or contact suppliers.
 
 ## Next build milestones
 
