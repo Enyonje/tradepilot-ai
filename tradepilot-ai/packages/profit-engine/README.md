@@ -1,0 +1,1 @@
+Deterministic profit logic currently starts in apps/api/src/services/profit.ts. Extract it here when the shared contract stabilizes.

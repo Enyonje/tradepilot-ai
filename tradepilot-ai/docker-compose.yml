@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tradepilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tradepilot
+      POSTGRES_PASSWORD: tradepilot
+      POSTGRES_DB: tradepilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - tradepilot_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradepilot -d tradepilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: tradepilot-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - tradepilot_redis:/data
+
+volumes:
+  tradepilot_pg:
+  tradepilot_redis:

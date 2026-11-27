@@ -1,0 +1,1 @@
+Agent execution contracts, tool permissions, run state and orchestration will be implemented here in the next build stage.

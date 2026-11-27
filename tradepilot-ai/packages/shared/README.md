@@ -1,0 +1,1 @@
+Shared contracts and types will live here as frontend and API modules expand.
