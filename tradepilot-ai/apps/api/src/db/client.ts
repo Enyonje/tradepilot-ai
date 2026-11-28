@@ -1,9 +1,12 @@
-import { PrismaClient } from "@prisma/client";
+import * as PrismaClientModule from "@prisma/client";
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+const PrismaClient =
+  PrismaClientModule.PrismaClient ??
+  (PrismaClientModule as { default?: { PrismaClient?: typeof PrismaClientModule.PrismaClient } })
+    .default?.PrismaClient;
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient({
-  log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
-});
+if (!PrismaClient) {
+  throw new Error("Unable to resolve PrismaClient from @prisma/client. Run `npx prisma generate`.");
+}
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+export const prisma = new PrismaClient();

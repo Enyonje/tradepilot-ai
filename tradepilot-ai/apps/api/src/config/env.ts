@@ -57,15 +57,26 @@ export const env = {
   trawlApiBase: (process.env.TRAWL_API_BASE || "https://api.trawl.dev").trim(),
   connectorTimeoutMs: parsePositiveInt(process.env.COMMERCE_CONNECTOR_TIMEOUT_MS, 15000),
 
+  // Additional suppliers (Printful, Printify, AliExpress / DSers, AutoDS, Spocket, Zendrop)
+  printfulApiKey: (process.env.PRINTFUL_API_KEY || "").trim(),
+  printifyApiToken: (process.env.PRINTIFY_API_TOKEN || "").trim(),
+  printifyShopId: (process.env.PRINTIFY_SHOP_ID || "").trim(),
+  aliexpressAppKey: (process.env.ALIEXPRESS_APP_KEY || "").trim(),
+  aliexpressAppSecret: (process.env.ALIEXPRESS_APP_SECRET || "").trim(),
+  aliexpressAccessToken: (process.env.ALIEXPRESS_ACCESS_TOKEN || "").trim(),
+  autodsApiKey: (process.env.AUTODS_API_KEY || "").trim(),
+  spocketApiKey: (process.env.SPOCKET_API_KEY || "").trim(),
+  zendropApiKey: (process.env.ZENDROP_API_KEY || "").trim(),
+
   // Autonomous sourcing & marketplace publishing
   autopilotEnabled: parseBool(process.env.AUTOPILOT_ENABLED, false),
   autopilotIntervalMinutes: parsePositiveInt(process.env.AUTOPILOT_INTERVAL_MINUTES, 360),
   autoPublishEnabled: parseBool(process.env.AUTO_PUBLISH_ENABLED, false),
 
-  // Optional store publishing credentials (configure whichever marketplace you connect first)
+  // Storefronts & marketplaces (Shopify, eBay, WooCommerce, Amazon SP-API, Walmart)
   shopifyStoreDomain: (process.env.SHOPIFY_STORE_DOMAIN || "").trim(),
   shopifyAdminToken: (process.env.SHOPIFY_ADMIN_TOKEN || "").trim(),
-  shopifyApiVersion: (process.env.SHOPIFY_API_VERSION || "2025-01").trim(),
+  shopifyApiVersion: (process.env.SHOPIFY_API_VERSION || "2026-10").trim(),
 
   ebayClientId: (process.env.EBAY_CLIENT_ID || "").trim(),
   ebayClientSecret: (process.env.EBAY_CLIENT_SECRET || "").trim(),
@@ -74,5 +85,13 @@ export const env = {
 
   wooCommerceUrl: (process.env.WOOCOMMERCE_URL || "").trim(),
   wooCommerceConsumerKey: (process.env.WOOCOMMERCE_CONSUMER_KEY || "").trim(),
-  wooCommerceConsumerSecret: (process.env.WOOCOMMERCE_CONSUMER_SECRET || "").trim()
+  wooCommerceConsumerSecret: (process.env.WOOCOMMERCE_CONSUMER_SECRET || "").trim(),
+
+  amazonClientId: (process.env.AMAZON_SP_CLIENT_ID || "").trim(),
+  amazonClientSecret: (process.env.AMAZON_SP_CLIENT_SECRET || "").trim(),
+  amazonRefreshToken: (process.env.AMAZON_SP_REFRESH_TOKEN || "").trim(),
+  amazonMarketplaceId: (process.env.AMAZON_MARKETPLACE_ID || "").trim(),
+
+  walmartClientId: (process.env.WALMART_CLIENT_ID || "").trim(),
+  walmartClientSecret: (process.env.WALMART_CLIENT_SECRET || "").trim()
 };

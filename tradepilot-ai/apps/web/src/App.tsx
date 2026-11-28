@@ -2,14 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowUpRight, Bell, Boxes, BrainCircuit, CheckCircle2,
   ChevronDown, CircleDollarSign, Command, Globe2, LayoutDashboard,
-  PackageSearch, RefreshCw, Search, Settings2, ShieldAlert, ShieldCheck,
-  ShoppingBag, Sparkles, Truck, XCircle, Zap
+  PackageSearch, Play, RefreshCw, Search, Settings2, ShieldAlert,
+  ShieldCheck, ShoppingBag, Sparkles, Truck, XCircle, Zap
 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
 
 type Provider = { name: string; model: string | null; configured: boolean };
-type AgentItem = { key?: string; id?: string; name: string; department?: string; dept?: string; status?: string; state?: string; description?: string };
+type AgentItem = {
+  key?: string;
+  id?: string;
+  name: string;
+  department?: string;
+  dept?: string;
+  status?: string;
+  state?: string;
+  description?: string;
+};
 type AgentRunItem = {
   id: string;
   agentKey: string;
@@ -52,6 +61,21 @@ type Supplier = {
   shippingNotes?: string | null;
   returnPolicy?: string | null;
 };
+type AutopilotState = {
+  config?: {
+    enabled?: boolean;
+    intervalMinutes?: number;
+    minNetProfit?: number;
+    minRoiPercent?: number;
+    defaultShippingEstimate?: number;
+    returnsReservePercent?: number;
+    autoPromoteApproved?: boolean;
+    seedKeywords?: string[];
+  };
+  running?: boolean;
+  scheduled?: boolean;
+  lastCycleAt?: string | null;
+};
 type MarketInfo = Record<string, any>;
 type IntegrationInfo = Record<string, any>;
 
@@ -88,6 +112,7 @@ export function App() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [markets, setMarkets] = useState<MarketInfo[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
+  const [autopilot, setAutopilot] = useState<AutopilotState | null>(null);
   const [apiState, setApiState] = useState("Connecting");
   const [active, setActive] = useState("Overview");
   const [statusMessage, setStatusMessage] = useState("");
@@ -137,6 +162,12 @@ export function App() {
   const [supShippingNotes, setSupShippingNotes] = useState("");
   const [supReturnPolicy, setSupReturnPolicy] = useState("");
 
+  // Unified Command Center pipeline state
+  const [pipelineKeywords, setPipelineKeywords] = useState("");
+  const [pipelineBusy, setPipelineBusy] = useState(false);
+  const [pipelineResult, setPipelineResult] = useState<any>(null);
+  const [pipelineError, setPipelineError] = useState("");
+
   // AI Command Center chat state
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiSystem, setAiSystem] = useState("");
@@ -148,16 +179,18 @@ export function App() {
   async function refreshAll() {
     setApiState("Connecting");
     try {
-      const [healthRes, provRes, agentsRes, runsRes, oppsRes, supRes, mktRes, intRes] = await Promise.all([
-        fetch(`${API}/health`),
-        fetch(`${API}/ai/providers`),
-        fetch(`${API}/agents`),
-        fetch(`${API}/agents/runs?limit=25`),
-        fetch(`${API}/opportunities?limit=100`),
-        fetch(`${API}/suppliers`),
-        fetch(`${API}/markets`),
-        fetch(`${API}/integrations`)
-      ]);
+      const [healthRes, provRes, agentsRes, runsRes, oppsRes, supRes, mktRes, intRes, autoRes] =
+        await Promise.all([
+          fetch(`${API}/health`),
+          fetch(`${API}/ai/providers`),
+          fetch(`${API}/agents`),
+          fetch(`${API}/agents/runs?limit=25`),
+          fetch(`${API}/opportunities?limit=100`),
+          fetch(`${API}/suppliers`),
+          fetch(`${API}/markets`),
+          fetch(`${API}/integrations`),
+          fetch(`${API}/autopilot`).catch(() => null)
+        ]);
 
       if (!healthRes.ok) throw new Error("Health check failed");
       setApiState("Online");
@@ -190,6 +223,9 @@ export function App() {
         const d = await intRes.json();
         setIntegrations(Array.isArray(d.integrations) ? d.integrations : Array.isArray(d) ? d : []);
       }
+      if (autoRes && autoRes.ok) {
+        setAutopilot(await autoRes.json());
+      }
     } catch {
       setApiState("API offline");
     }
@@ -198,6 +234,55 @@ export function App() {
   useEffect(() => {
     refreshAll();
   }, []);
+
+  async function runUnifiedPipeline(event: React.FormEvent) {
+    event.preventDefault();
+    setPipelineBusy(true);
+    setPipelineError("");
+    setPipelineResult(null);
+    setStatusMessage("");
+
+    const parsedKeywords = pipelineKeywords
+      .split(",")
+      .map((k) => k.trim())
+      .filter((k) => k.length >= 2);
+
+    try {
+      const res = await fetch(`${API}/autopilot/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsedKeywords.length ? { keywords: parsedKeywords } : {})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unified pipeline run failed");
+      setPipelineResult(data);
+      setStatusMessage(
+        `Pipeline finished: ${data.opportunitiesCreated ?? 0} evaluated (${data.approvedCount ?? 0} approved, ${data.rejectedCount ?? 0} rejected).`
+      );
+      await refreshAll();
+    } catch (err) {
+      setPipelineError(err instanceof Error ? err.message : "Unified pipeline run failed");
+    } finally {
+      setPipelineBusy(false);
+    }
+  }
+
+  async function toggleAutopilotSchedule(enabled: boolean) {
+    setStatusMessage("");
+    const res = await fetch(`${API}/autopilot`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setStatusMessage(err.error || "Could not update autopilot schedule");
+      return;
+    }
+    const updated = await res.json();
+    setAutopilot(updated);
+    setStatusMessage(`Background autopilot ${enabled ? "enabled" : "paused"}.`);
+  }
 
   async function startResearch(event: React.FormEvent) {
     event.preventDefault();
@@ -293,9 +378,18 @@ export function App() {
     const soldMp = country === "GB" ? "EBAY_GB" : "EBAY_US";
 
     const [cjRes, trRes, ebRes] = await Promise.allSettled([
-      fetch(`${API}/research/cj/products?keyword=${q}&page=1&size=10`).then(async r => ({ ok: r.ok, body: await r.json() })),
-      fetch(`${API}/research/trends?query=${q}&geo=${encodeURIComponent(country)}`).then(async r => ({ ok: r.ok, body: await r.json() })),
-      fetch(`${API}/research/ebay/sold?query=${q}&marketplace=${soldMp}&limit=20`).then(async r => ({ ok: r.ok, body: await r.json() }))
+      fetch(`${API}/research/cj/products?keyword=${q}&page=1&size=10`).then(async (r) => ({
+        ok: r.ok,
+        body: await r.json()
+      })),
+      fetch(`${API}/research/trends?query=${q}&geo=${encodeURIComponent(country)}`).then(async (r) => ({
+        ok: r.ok,
+        body: await r.json()
+      })),
+      fetch(`${API}/research/ebay/sold?query=${q}&marketplace=${soldMp}&limit=20`).then(async (r) => ({
+        ok: r.ok,
+        body: await r.json()
+      }))
     ]);
 
     setCjResult(cjRes.status === "fulfilled" ? cjRes.value : { ok: false, body: { error: "Request failed" } });
@@ -402,13 +496,19 @@ export function App() {
   }
 
   const metrics = useMemo(() => {
-    const listedOrApproved = opportunities.filter(o => o.status === "LISTED" || o.status === "APPROVED");
+    const listedOrApproved = opportunities.filter((o) => o.status === "LISTED" || o.status === "APPROVED");
     const grossPipeline = listedOrApproved.reduce((acc, o) => acc + num(o.estimatedSalePrice), 0);
     const estimatedNet = listedOrApproved.reduce((acc, o) => {
-      const costs = num(o.supplierPrice) + num(o.shippingCost) + num(o.platformFees) + num(o.paymentFees) + num(o.returnsReserve) + num(o.taxAndDutyReserve);
+      const costs =
+        num(o.supplierPrice) +
+        num(o.shippingCost) +
+        num(o.platformFees) +
+        num(o.paymentFees) +
+        num(o.returnsReserve) +
+        num(o.taxAndDutyReserve);
       return acc + (num(o.estimatedSalePrice) - costs);
     }, 0);
-    const listedCount = opportunities.filter(o => o.status === "LISTED").length;
+    const listedCount = opportunities.filter((o) => o.status === "LISTED").length;
     return {
       grossPipeline,
       estimatedNet,
@@ -417,17 +517,20 @@ export function App() {
     };
   }, [opportunities]);
 
-  const configured = providers.filter(p => p.configured).length;
-  const listedItems = opportunities.filter(o => o.status === "LISTED");
-  const approvedItems = opportunities.filter(o => o.status === "APPROVED");
-  const reviewItems = opportunities.filter(o => o.status === "DISCOVERED" || o.status === "RESEARCHING");
+  const configured = providers.filter((p) => p.configured).length;
+  const listedItems = opportunities.filter((o) => o.status === "LISTED");
+  const approvedItems = opportunities.filter((o) => o.status === "APPROVED");
+  const reviewItems = opportunities.filter((o) => o.status === "DISCOVERED" || o.status === "RESEARCHING");
 
   return (
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Command size={21} /></div>
-          <div><div className="brand-name">tradepilot<span>AI</span></div><div className="brand-caption">AUTONOMOUS COMMERCE</div></div>
+          <div>
+            <div className="brand-name">tradepilot<span>AI</span></div>
+            <div className="brand-caption">AUTONOMOUS COMMERCE</div>
+          </div>
         </div>
         <div className="workspace">
           <div className="workspace-icon">{country}</div>
@@ -453,9 +556,14 @@ export function App() {
             <Sparkles size={17} />
             <b>Autopilot intelligence</b>
             <p>{opportunities.length} opportunities · {runs.length} recorded runs</p>
-            <button onClick={() => setActive("AI command center")}>Open command center <ArrowUpRight size={14} /></button>
+            <button onClick={() => setActive("AI command center")}>
+              Open command center <ArrowUpRight size={14} />
+            </button>
           </div>
-          <button className={active === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setActive("Settings")}>
+          <button
+            className={active === "Settings" ? "nav-item active" : "nav-item"}
+            onClick={() => setActive("Settings")}
+          >
             <Settings2 size={17} />
             <span>Settings</span>
           </button>
@@ -471,9 +579,13 @@ export function App() {
         <header className="topbar">
           <div className="crumb">Workspace <span>/</span> <b>{active}</b></div>
           <div className="top-actions">
-            <button className="icon-button" onClick={refreshAll} title="Refresh live state"><RefreshCw size={16} /></button>
+            <button className="icon-button" onClick={refreshAll} title="Refresh live state">
+              <RefreshCw size={16} />
+            </button>
             <div className="global-pill"><Globe2 size={15} /> {country} · {currency}</div>
-            <button className="icon-button" onClick={() => setActive("Risk & compliance")}><Bell size={17} /><i /></button>
+            <button className="icon-button" onClick={() => setActive("Risk & compliance")}>
+              <Bell size={17} /><i />
+            </button>
             <div className="top-avatar">TP</div>
           </div>
         </header>
@@ -502,7 +614,10 @@ export function App() {
                 <div className="hero-copy">
                   <div className="hero-tag"><Zap size={13} /> TRADEPILOT AUTOPILOT</div>
                   <h2>Turn market signals<br />into <em>profitable decisions.</em></h2>
-                  <p>API status: <b>{apiState}</b> · {configured}/{providers.length || 3} AI providers configured · {suppliers.length} suppliers in catalog.</p>
+                  <p>
+                    API status: <b>{apiState}</b> · {configured}/{providers.length || 3} AI providers configured ·{" "}
+                    {suppliers.length} suppliers in catalog.
+                  </p>
                   <div className="hero-actions">
                     <button className="hero-button" onClick={() => setActive("AI command center")}>
                       Launch AI command center <ArrowUpRight size={15} />
@@ -534,17 +649,43 @@ export function App() {
               </div>
 
               <section className="metric-grid">
-                <Metric icon={<CircleDollarSign />} label="Approved & listed sale value" value={money(metrics.grossPipeline, currency)} change={`${approvedItems.length + listedItems.length} active items`} tone="mint" />
-                <Metric icon={<ArrowUpRight />} label="Estimated net margin" value={money(metrics.estimatedNet, currency)} change="Sale price minus recorded costs" tone="blue" />
-                <Metric icon={<PackageSearch />} label="Opportunities" value={String(metrics.opportunitiesCount)} change={`${reviewItems.length} awaiting review`} tone="violet" />
-                <Metric icon={<ShoppingBag />} label="Listed products" value={String(metrics.listedCount)} change={`${suppliers.length} suppliers registered`} tone="amber" />
+                <Metric
+                  icon={<CircleDollarSign />}
+                  label="Approved & listed sale value"
+                  value={money(metrics.grossPipeline, currency)}
+                  change={`${approvedItems.length + listedItems.length} active items`}
+                  tone="mint"
+                />
+                <Metric
+                  icon={<ArrowUpRight />}
+                  label="Estimated net margin"
+                  value={money(metrics.estimatedNet, currency)}
+                  change="Sale price minus recorded costs"
+                  tone="blue"
+                />
+                <Metric
+                  icon={<PackageSearch />}
+                  label="Opportunities"
+                  value={String(metrics.opportunitiesCount)}
+                  change={`${reviewItems.length} awaiting review`}
+                  tone="violet"
+                />
+                <Metric
+                  icon={<ShoppingBag />}
+                  label="Listed products"
+                  value={String(metrics.listedCount)}
+                  change={`${suppliers.length} suppliers registered`}
+                  tone="amber"
+                />
               </section>
 
               <section className="lower-grid">
                 <div className="panel agent-panel">
                   <div className="panel-head">
                     <div><h3>Agent workforce</h3><p>Registered commerce agents</p></div>
-                    <button className="text-button" onClick={() => setActive("AI command center")}>View all <ArrowUpRight size={14} /></button>
+                    <button className="text-button" onClick={() => setActive("AI command center")}>
+                      View all <ArrowUpRight size={14} />
+                    </button>
                   </div>
                   <div className="agent-list">
                     {agents.length === 0 ? (
@@ -595,15 +736,32 @@ export function App() {
             <>
               <section className="research-panel">
                 <h3>Multi-agent product research</h3>
-                <p>Runs CJdropshipping search, Google Trends, and eBay sold comps, records a real <code>AgentRun</code>, and persists matching <code>ProductOpportunity</code> rows when currency and market match.</p>
+                <p>
+                  Runs CJdropshipping search, Google Trends, and eBay sold comps, records a real{" "}
+                  <code>AgentRun</code>, and persists matching <code>ProductOpportunity</code> rows when currency and
+                  market match.
+                </p>
                 <form className="research-form" onSubmit={startResearch}>
                   <div className="research-field">
                     <label>Product keyword</label>
-                    <input required minLength={2} maxLength={120} value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. wireless earbuds" />
+                    <input
+                      required
+                      minLength={2}
+                      maxLength={120}
+                      value={keyword}
+                      onChange={(e) => setKeyword(e.target.value)}
+                      placeholder="e.g. wireless earbuds"
+                    />
                   </div>
                   <div className="research-field">
                     <label>Target country</label>
-                    <select value={country} onChange={e => { setCountry(e.target.value); setCurrency(e.target.value === "GB" ? "GBP" : "USD"); }}>
+                    <select
+                      value={country}
+                      onChange={(e) => {
+                        setCountry(e.target.value);
+                        setCurrency(e.target.value === "GB" ? "GBP" : "USD");
+                      }}
+                    >
                       <option value="US">United States</option>
                       <option value="GB">United Kingdom</option>
                       <option value="CA">Canada</option>
@@ -613,13 +771,13 @@ export function App() {
                   </div>
                   <div className="research-field">
                     <label>Currency</label>
-                    <select value={currency} onChange={e => setCurrency(e.target.value)}>
+                    <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
                       <option>USD</option><option>GBP</option><option>CAD</option><option>AUD</option><option>KES</option>
                     </select>
                   </div>
                   <div className="research-field">
                     <label>Target marketplace</label>
-                    <select value={marketplace} onChange={e => setMarketplace(e.target.value)}>
+                    <select value={marketplace} onChange={(e) => setMarketplace(e.target.value)}>
                       <option>EBAY</option><option>AMAZON</option><option>SHOPIFY</option><option>WALMART</option><option>JUMIA</option>
                     </select>
                   </div>
@@ -656,23 +814,56 @@ export function App() {
                 <form className="research-form" onSubmit={handleImportCandidate}>
                   <div className="research-field">
                     <label>Title</label>
-                    <input required minLength={2} value={importTitle} onChange={e => setImportTitle(e.target.value)} placeholder="Product title" />
+                    <input
+                      required
+                      minLength={2}
+                      value={importTitle}
+                      onChange={(e) => setImportTitle(e.target.value)}
+                      placeholder="Product title"
+                    />
                   </div>
                   <div className="research-field">
                     <label>Supplier cost ({currency})</label>
-                    <input required type="number" step="0.01" min="0.01" value={importBuyPrice} onChange={e => setImportBuyPrice(e.target.value)} placeholder="12.50" />
+                    <input
+                      required
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={importBuyPrice}
+                      onChange={(e) => setImportBuyPrice(e.target.value)}
+                      placeholder="12.50"
+                    />
                   </div>
                   <div className="research-field">
                     <label>Target sale price ({currency})</label>
-                    <input required type="number" step="0.01" min="0.01" value={importSellPrice} onChange={e => setImportSellPrice(e.target.value)} placeholder="34.99" />
+                    <input
+                      required
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={importSellPrice}
+                      onChange={(e) => setImportSellPrice(e.target.value)}
+                      placeholder="34.99"
+                    />
                   </div>
                   <div className="research-field">
                     <label>Shipping ({currency})</label>
-                    <input type="number" step="0.01" min="0" value={importShipping} onChange={e => setImportShipping(e.target.value)} />
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={importShipping}
+                      onChange={(e) => setImportShipping(e.target.value)}
+                    />
                   </div>
                   <div className="research-field">
                     <label>Source URL (optional)</label>
-                    <input type="url" value={importUrl} onChange={e => setImportUrl(e.target.value)} placeholder="https://..." />
+                    <input
+                      type="url"
+                      value={importUrl}
+                      onChange={(e) => setImportUrl(e.target.value)}
+                      placeholder="https://..."
+                    />
                   </div>
                   <button className="research-submit" disabled={importBusy} type="submit">
                     {importBusy ? "Saving…" : "Import candidate"}
@@ -691,13 +882,21 @@ export function App() {
                         <div className="agent-meta">
                           <b>{opp.title}</b>
                           <small>
-                            {opp.status} · {opp.targetCountry} · {opp.marketplace || "N/A"} · Buy {money(num(opp.supplierPrice), opp.currency)} → Est. Sell {money(num(opp.estimatedSalePrice), opp.currency)}
+                            {opp.status} · {opp.targetCountry} · {opp.marketplace || "N/A"} · Buy{" "}
+                            {money(num(opp.supplierPrice), opp.currency)} → Est. Sell{" "}
+                            {money(num(opp.estimatedSalePrice), opp.currency)}
                           </small>
                         </div>
                         <div style={{ display: "flex", gap: 8 }}>
-                          <button className="text-button" onClick={() => setOpportunityStatus(opp.id, "APPROVED")}>Approve</button>
-                          <button className="text-button" onClick={() => setOpportunityStatus(opp.id, "LISTED")}>List</button>
-                          <button className="text-button" onClick={() => setOpportunityStatus(opp.id, "REJECTED")}>Reject</button>
+                          <button className="text-button" onClick={() => setOpportunityStatus(opp.id, "APPROVED")}>
+                            Approve
+                          </button>
+                          <button className="text-button" onClick={() => setOpportunityStatus(opp.id, "LISTED")}>
+                            List
+                          </button>
+                          <button className="text-button" onClick={() => setOpportunityStatus(opp.id, "REJECTED")}>
+                            Reject
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -715,7 +914,13 @@ export function App() {
                 <form className="research-form" onSubmit={runMarketProbes}>
                   <div className="research-field">
                     <label>Search query</label>
-                    <input required minLength={2} value={probeQuery} onChange={e => setProbeQuery(e.target.value)} placeholder="e.g. mechanical keyboard" />
+                    <input
+                      required
+                      minLength={2}
+                      value={probeQuery}
+                      onChange={(e) => setProbeQuery(e.target.value)}
+                      placeholder="e.g. mechanical keyboard"
+                    />
                   </div>
                   <button className="research-submit" disabled={probeBusy || probeQuery.trim().length < 2} type="submit">
                     {probeBusy ? "Querying…" : "Run connector probes"}
@@ -756,14 +961,14 @@ export function App() {
               <h3>Deterministic profit & fee calculator</h3>
               <p>Calls <code>POST /api/profit/calculate</code> with explicit unit costs, fees, and reserves.</p>
               <form className="research-form" onSubmit={runProfitCalculation}>
-                <div className="research-field"><label>Sale price ({currency})</label><input type="number" step="0.01" min="0" value={salePrice} onChange={e => setSalePrice(e.target.value)} /></div>
-                <div className="research-field"><label>Supplier cost ({currency})</label><input type="number" step="0.01" min="0" value={supplierCost} onChange={e => setSupplierCost(e.target.value)} /></div>
-                <div className="research-field"><label>Shipping ({currency})</label><input type="number" step="0.01" min="0" value={shipping} onChange={e => setShipping(e.target.value)} /></div>
-                <div className="research-field"><label>Platform fees ({currency})</label><input type="number" step="0.01" min="0" value={platformFees} onChange={e => setPlatformFees(e.target.value)} /></div>
-                <div className="research-field"><label>Payment fees ({currency})</label><input type="number" step="0.01" min="0" value={paymentFees} onChange={e => setPaymentFees(e.target.value)} /></div>
-                <div className="research-field"><label>Ads ({currency})</label><input type="number" step="0.01" min="0" value={advertisingCost} onChange={e => setAdvertisingCost(e.target.value)} /></div>
-                <div className="research-field"><label>Returns reserve ({currency})</label><input type="number" step="0.01" min="0" value={returnsReserve} onChange={e => setReturnsReserve(e.target.value)} /></div>
-                <div className="research-field"><label>Tax & duty ({currency})</label><input type="number" step="0.01" min="0" value={taxAndDuty} onChange={e => setTaxAndDuty(e.target.value)} /></div>
+                <div className="research-field"><label>Sale price ({currency})</label><input type="number" step="0.01" min="0" value={salePrice} onChange={(e) => setSalePrice(e.target.value)} /></div>
+                <div className="research-field"><label>Supplier cost ({currency})</label><input type="number" step="0.01" min="0" value={supplierCost} onChange={(e) => setSupplierCost(e.target.value)} /></div>
+                <div className="research-field"><label>Shipping ({currency})</label><input type="number" step="0.01" min="0" value={shipping} onChange={(e) => setShipping(e.target.value)} /></div>
+                <div className="research-field"><label>Platform fees ({currency})</label><input type="number" step="0.01" min="0" value={platformFees} onChange={(e) => setPlatformFees(e.target.value)} /></div>
+                <div className="research-field"><label>Payment fees ({currency})</label><input type="number" step="0.01" min="0" value={paymentFees} onChange={(e) => setPaymentFees(e.target.value)} /></div>
+                <div className="research-field"><label>Ads ({currency})</label><input type="number" step="0.01" min="0" value={advertisingCost} onChange={(e) => setAdvertisingCost(e.target.value)} /></div>
+                <div className="research-field"><label>Returns reserve ({currency})</label><input type="number" step="0.01" min="0" value={returnsReserve} onChange={(e) => setReturnsReserve(e.target.value)} /></div>
+                <div className="research-field"><label>Tax & duty ({currency})</label><input type="number" step="0.01" min="0" value={taxAndDuty} onChange={(e) => setTaxAndDuty(e.target.value)} /></div>
                 <button className="research-submit" type="submit">Calculate profit</button>
               </form>
               {calcError && <div className="research-result"><span className="research-error">{calcError}</span></div>}
@@ -780,13 +985,13 @@ export function App() {
               <section className="research-panel">
                 <h3>Add supplier</h3>
                 <form className="research-form" onSubmit={handleCreateSupplier}>
-                  <div className="research-field"><label>Name</label><input required minLength={2} value={supName} onChange={e => setSupName(e.target.value)} placeholder="Supplier name" /></div>
-                  <div className="research-field"><label>Country code (2-letter)</label><input required minLength={2} maxLength={2} value={supCountry} onChange={e => setSupCountry(e.target.value)} placeholder="CN" /></div>
-                  <div className="research-field"><label>Website</label><input type="url" value={supWebsite} onChange={e => setSupWebsite(e.target.value)} placeholder="https://example.com" /></div>
-                  <div className="research-field"><label>Contact email</label><input type="email" value={supEmail} onChange={e => setSupEmail(e.target.value)} placeholder="ops@supplier.com" /></div>
-                  <div className="research-field"><label>Source type</label><input value={supSourceType} onChange={e => setSupSourceType(e.target.value)} placeholder="manual" /></div>
-                  <div className="research-field"><label>Shipping notes</label><input value={supShippingNotes} onChange={e => setSupShippingNotes(e.target.value)} placeholder="Lead times & lanes" /></div>
-                  <div className="research-field"><label>Return policy</label><input value={supReturnPolicy} onChange={e => setSupReturnPolicy(e.target.value)} placeholder="RMA / defect terms" /></div>
+                  <div className="research-field"><label>Name</label><input required minLength={2} value={supName} onChange={(e) => setSupName(e.target.value)} placeholder="Supplier name" /></div>
+                  <div className="research-field"><label>Country code (2-letter)</label><input required minLength={2} maxLength={2} value={supCountry} onChange={(e) => setSupCountry(e.target.value)} placeholder="CN" /></div>
+                  <div className="research-field"><label>Website</label><input type="url" value={supWebsite} onChange={(e) => setSupWebsite(e.target.value)} placeholder="https://example.com" /></div>
+                  <div className="research-field"><label>Contact email</label><input type="email" value={supEmail} onChange={(e) => setSupEmail(e.target.value)} placeholder="ops@supplier.com" /></div>
+                  <div className="research-field"><label>Source type</label><input value={supSourceType} onChange={(e) => setSupSourceType(e.target.value)} placeholder="manual" /></div>
+                  <div className="research-field"><label>Shipping notes</label><input value={supShippingNotes} onChange={(e) => setSupShippingNotes(e.target.value)} placeholder="Lead times & lanes" /></div>
+                  <div className="research-field"><label>Return policy</label><input value={supReturnPolicy} onChange={(e) => setSupReturnPolicy(e.target.value)} placeholder="RMA / defect terms" /></div>
                   <button className="research-submit" type="submit">Save supplier</button>
                 </form>
               </section>
@@ -801,7 +1006,10 @@ export function App() {
                       <div className="agent-row" key={s.id}>
                         <div className="agent-meta">
                           <b>{s.name}</b>
-                          <small>{s.countryCode} · {s.sourceType} · {s.verified ? "Verified" : "Unverified"}{s.website ? ` · ${s.website}` : ""}</small>
+                          <small>
+                            {s.countryCode} · {s.sourceType} · {s.verified ? "Verified" : "Unverified"}
+                            {s.website ? ` · ${s.website}` : ""}
+                          </small>
                         </div>
                         <button className="text-button" onClick={() => toggleSupplierVerification(s.id, !s.verified)}>
                           {s.verified ? <><XCircle size={14} /> Unverify</> : <><CheckCircle2 size={14} /> Verify</>}
@@ -819,20 +1027,27 @@ export function App() {
               <h3>Approved & listed opportunities</h3>
               <p>Manage items promoted to <code>APPROVED</code> or <code>LISTED</code> in PostgreSQL.</p>
               {[...listedItems, ...approvedItems].length === 0 ? (
-                <p>No approved or listed opportunities yet. Approve or list items from <b>Product discovery</b> or <b>Risk & compliance</b>.</p>
+                <p>No approved or listed opportunities yet. Run the command center pipeline or approve items first.</p>
               ) : (
                 <div className="agent-list">
                   {[...listedItems, ...approvedItems].map((item) => (
                     <div className="agent-row" key={item.id}>
                       <div className="agent-meta">
                         <b>{item.title}</b>
-                        <small>Status: {item.status} · Marketplace: {item.marketplace || "Unset"} · Est. Sale: {money(num(item.estimatedSalePrice), item.currency)}</small>
+                        <small>
+                          Status: {item.status} · Marketplace: {item.marketplace || "Unset"} · Est. Sale:{" "}
+                          {money(num(item.estimatedSalePrice), item.currency)}
+                        </small>
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         {item.status !== "LISTED" && (
-                          <button className="text-button" onClick={() => setOpportunityStatus(item.id, "LISTED")}>Mark LISTED</button>
+                          <button className="text-button" onClick={() => setOpportunityStatus(item.id, "LISTED")}>
+                            Mark LISTED
+                          </button>
                         )}
-                        <button className="text-button" onClick={() => setOpportunityStatus(item.id, "ARCHIVED")}>Archive</button>
+                        <button className="text-button" onClick={() => setOpportunityStatus(item.id, "ARCHIVED")}>
+                          Archive
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -844,7 +1059,10 @@ export function App() {
           {active === "Orders" && (
             <section className="research-panel">
               <h3>Active listings & order sync readiness</h3>
-              <p>No order table or live marketplace order webhook is configured yet; below are items currently marked <code>LISTED</code> and your registered integrations.</p>
+              <p>
+                No store order webhook or Order table is connected yet; below are items currently marked{" "}
+                <code>LISTED</code> and your registered integrations.
+              </p>
               <div className="agent-list">
                 {listedItems.length === 0 ? (
                   <p>0 listed products ready for order fulfillment.</p>
@@ -853,7 +1071,10 @@ export function App() {
                     <div className="agent-row" key={item.id}>
                       <div className="agent-meta">
                         <b>{item.title}</b>
-                        <small>{item.marketplace || "Marketplace"} · {item.targetCountry} · {money(num(item.estimatedSalePrice), item.currency)}</small>
+                        <small>
+                          {item.marketplace || "Marketplace"} · {item.targetCountry} ·{" "}
+                          {money(num(item.estimatedSalePrice), item.currency)}
+                        </small>
                       </div>
                       <span className="agent-state">LISTED</span>
                     </div>
@@ -869,42 +1090,49 @@ export function App() {
           {active === "AI command center" && (
             <>
               <section className="research-panel">
-                <h3>Multi-agent product research</h3>
-                <p>Trigger a full research workflow or send a direct prompt through <code>/api/ai/chat</code>.</p>
-                <form className="research-form" onSubmit={startResearch}>
-                  <div className="research-field">
-                    <label>Product keyword</label>
-                    <input required minLength={2} maxLength={120} value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="e.g. portable espresso maker" />
+                <h3>Unified agent pipeline (Discovery → Profit → Approval → Listing → Order)</h3>
+                <p>
+                  Connects discovery, comps, deterministic profit gating, and AI listing drafts into one run via{" "}
+                  <code>POST /api/autopilot/run</code>. Live marketplace publishing and order webhooks require connected
+                  store credentials/webhooks and will not fabricate listings or orders when unconfigured.
+                </p>
+
+                <div className="research-stats" style={{ marginBottom: 14 }}>
+                  <span>Schedule: <b>{autopilot?.scheduled || autopilot?.config?.enabled ? "Active" : "Manual / Off"}</b></span>
+                  <span>Approved ready: <b>{approvedItems.length}</b></span>
+                  <span>Listed: <b>{listedItems.length}</b></span>
+                  <span>Order sync: <b>Not connected</b></span>
+                </div>
+
+                <form className="research-form" onSubmit={runUnifiedPipeline}>
+                  <div className="research-field" style={{ flex: 2 }}>
+                    <label>Seed keywords (comma-separated, optional if ProductSource exists)</label>
+                    <input
+                      value={pipelineKeywords}
+                      onChange={(e) => setPipelineKeywords(e.target.value)}
+                      placeholder="e.g. magnetic phone mount, desk lamp"
+                    />
                   </div>
-                  <div className="research-field">
-                    <label>Target country</label>
-                    <select value={country} onChange={e => { setCountry(e.target.value); setCurrency(e.target.value === "GB" ? "GBP" : "USD"); }}>
-                      <option value="US">United States</option><option value="GB">United Kingdom</option><option value="CA">Canada</option><option value="AU">Australia</option><option value="KE">Kenya</option>
-                    </select>
-                  </div>
-                  <div className="research-field">
-                    <label>Currency</label>
-                    <select value={currency} onChange={e => setCurrency(e.target.value)}>
-                      <option>USD</option><option>GBP</option><option>CAD</option><option>AUD</option><option>KES</option>
-                    </select>
-                  </div>
-                  <div className="research-field">
-                    <label>Marketplace</label>
-                    <select value={marketplace} onChange={e => setMarketplace(e.target.value)}>
-                      <option>EBAY</option><option>AMAZON</option><option>SHOPIFY</option><option>WALMART</option><option>JUMIA</option>
-                    </select>
-                  </div>
-                  <button className="research-submit" disabled={researchBusy || keyword.trim().length < 2} type="submit">
-                    {researchBusy ? "Running…" : "Run research"}
+                  <button className="research-submit" disabled={pipelineBusy} type="submit">
+                    <Play size={15} /> {pipelineBusy ? "Running pipeline…" : "Run end-to-end pipeline"}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => toggleAutopilotSchedule(!(autopilot?.config?.enabled ?? false))}
+                  >
+                    {autopilot?.config?.enabled ? "Pause background loop" : "Enable background loop"}
                   </button>
                 </form>
-                {researchError && <div className="research-result"><span className="research-error">{researchError}</span></div>}
-                {researchOutput && (
+
+                {pipelineError && (
+                  <div className="research-result"><span className="research-error">{pipelineError}</span></div>
+                )}
+                {pipelineResult && (
                   <div className="research-result">
-                    <strong>Run {researchOutput.runId}</strong> · Saved: {researchOutput.opportunitiesCreated ?? 0}
-                    {researchOutput.aiAssessment && (
-                      <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", marginTop: 8 }}>{researchOutput.aiAssessment}</pre>
-                    )}
+                    <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>
+                      {JSON.stringify(pipelineResult, null, 2)}
+                    </pre>
                   </div>
                 )}
               </section>
@@ -914,15 +1142,24 @@ export function App() {
                 <form className="research-form" onSubmit={sendAiPrompt}>
                   <div className="research-field">
                     <label>Task label</label>
-                    <input value={aiTask} onChange={e => setAiTask(e.target.value)} />
+                    <input value={aiTask} onChange={(e) => setAiTask(e.target.value)} />
                   </div>
                   <div className="research-field">
                     <label>System instruction (optional)</label>
-                    <input value={aiSystem} onChange={e => setAiSystem(e.target.value)} placeholder="Optional system prompt" />
+                    <input
+                      value={aiSystem}
+                      onChange={(e) => setAiSystem(e.target.value)}
+                      placeholder="Optional system prompt"
+                    />
                   </div>
                   <div className="research-field" style={{ flex: 2 }}>
                     <label>Prompt</label>
-                    <input required value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ask your commerce analyst..." />
+                    <input
+                      required
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      placeholder="Ask your commerce analyst..."
+                    />
                   </div>
                   <button className="research-submit" disabled={aiBusy} type="submit">
                     {aiBusy ? "Sending…" : "Send prompt"}
@@ -946,7 +1183,11 @@ export function App() {
                       <div className="agent-row" key={r.id}>
                         <div className="agent-meta">
                           <b>{r.agentKey}</b>
-                          <small>{r.status} · Started {new Date(r.startedAt).toLocaleString()}{r.provider ? ` · ${r.provider}` : ""}{r.error ? ` · ${r.error}` : ""}</small>
+                          <small>
+                            {r.status} · Started {new Date(r.startedAt).toLocaleString()}
+                            {r.provider ? ` · ${r.provider}` : ""}
+                            {r.error ? ` · ${r.error}` : ""}
+                          </small>
                         </div>
                         <span className="agent-state">{r.status}</span>
                       </div>
@@ -968,12 +1209,22 @@ export function App() {
                   {reviewItems.map((item) => (
                     <div className="agent-row" key={item.id}>
                       <div className="agent-meta">
-                        <b><ShieldAlert size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />{item.title}</b>
-                        <small>{item.status} · {item.targetCountry} · Buy {money(num(item.supplierPrice), item.currency)} · Est. Sell {money(num(item.estimatedSalePrice), item.currency)}</small>
+                        <b>
+                          <ShieldAlert size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                          {item.title}
+                        </b>
+                        <small>
+                          {item.status} · {item.targetCountry} · Buy {money(num(item.supplierPrice), item.currency)} ·
+                          Est. Sell {money(num(item.estimatedSalePrice), item.currency)}
+                        </small>
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
-                        <button className="text-button" onClick={() => setOpportunityStatus(item.id, "APPROVED")}>Approve</button>
-                        <button className="text-button" onClick={() => setOpportunityStatus(item.id, "REJECTED")}>Reject</button>
+                        <button className="text-button" onClick={() => setOpportunityStatus(item.id, "APPROVED")}>
+                          Approve
+                        </button>
+                        <button className="text-button" onClick={() => setOpportunityStatus(item.id, "REJECTED")}>
+                          Reject
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -1003,7 +1254,8 @@ export function App() {
           )}
 
           <footer>
-            TRADEPILOT AI <span>·</span> GLOBAL COMMERCE INTELLIGENCE <span className="footer-right">API: {apiState}</span>
+            TRADEPILOT AI <span>·</span> GLOBAL COMMERCE INTELLIGENCE{" "}
+            <span className="footer-right">API: {apiState}</span>
           </footer>
         </div>
       </main>
@@ -1011,7 +1263,19 @@ export function App() {
   );
 }
 
-function Metric({ icon, label, value, change, tone }: { icon: React.ReactNode; label: string; value: string; change: string; tone: string }) {
+function Metric({
+  icon,
+  label,
+  value,
+  change,
+  tone
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  change: string;
+  tone: string;
+}) {
   return (
     <div className="metric-card">
       <div className={`metric-icon ${tone}`}>{icon}</div>
@@ -1022,12 +1286,30 @@ function Metric({ icon, label, value, change, tone }: { icon: React.ReactNode; l
   );
 }
 
-function Agent({ icon, name, dept, state }: { icon: React.ReactNode; name: string; dept: string; state: string }) {
+function Agent({
+  icon,
+  name,
+  dept,
+  state
+}: {
+  icon: React.ReactNode;
+  name: string;
+  dept: string;
+  state: string;
+}) {
   return (
     <div className="agent-row">
       <div className="agent-icon">{icon}</div>
       <div className="agent-meta"><b>{name}</b><small>{dept}</small></div>
-      <span className={state.toLowerCase() === "ready" || state.toLowerCase() === "active" ? "agent-state ready" : "agent-state"}>{state}</span>
+      <span
+        className={
+          state.toLowerCase() === "ready" || state.toLowerCase() === "active"
+            ? "agent-state ready"
+            : "agent-state"
+        }
+      >
+        {state}
+      </span>
     </div>
   );
 }

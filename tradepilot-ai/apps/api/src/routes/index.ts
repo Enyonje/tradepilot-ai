@@ -12,6 +12,7 @@ import { getGoogleTrends } from "../connectors/trends.js";
 import { getEbaySoldComps } from "../connectors/sold-comps.js";
 import { getAgentRuns, runProductResearch } from "../orchestration/product-research.js";
 import { OpportunityStatus } from "@prisma/client";
+import { getShopifyOrders, publishOpportunityToShopify } from "../connectors/shopify.js";
 import { prisma } from "../db/client.js";
 import {
   configureAutopilot,
@@ -183,6 +184,25 @@ router.get("/suppliers", async (req, res, next) => {
     const items = await getSuppliers(typeof req.query.country === "string" ? req.query.country : undefined);
     res.json({ items, count: items.length });
   } catch (error) { next(error); }
+});
+
+router.post("/opportunities/:id/publish/shopify", async (req, res, next) => {
+  try {
+    const result = await publishOpportunityToShopify(req.params.id);
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/orders/shopify", async (req, res, next) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 25;
+    const orders = await getShopifyOrders(Number.isInteger(limit) ? limit : 25);
+    res.json({ items: orders, count: orders.length });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.post("/suppliers", async (req, res, next) => {
